@@ -1,37 +1,48 @@
 # INFO5995 Assignment 1: AI-Assisted Cryptographic Vulnerability Discovery
 
-This project contains the security analysis and findings for the `a1_case1 (1).apk` Android application. The audit focuses on identifying cryptographic weaknesses and insecure randomness.
+This repository contains a static security analysis of `AssignmentRequirements/a1_case1 (1).apk`. After reviewing the assignment spec, rubric, decompiled source, and the existing findings, the deliverables were tightened to match what the APK actually does instead of overstating the exploit.
 
-## Project Structure
+## Verified App Behavior
 
-- `AssignmentRequirements/`: Original assignment specifications and the target APK.
-- `decompiled/`: The source code and resources extracted from the APK using `jadx`.
-- `findings/`: Contains the analysis results, report, and POC.
-  - `report.tex`: The security audit report in USENIX LaTeX format.
-  - `ai-log.txt`: A log of AI-assisted steps and tools used.
-  - `SessionTokenPOC.java`: A Proof-of-Concept demonstrating the predictability of the session token.
-- `tools/`: Local installation of `jadx` used for decompilation.
+- `MainActivity` stores `Username: <user> Password: <pass>` in `credentials.txt` inside app-private storage.
+- `Login.checkCredentials()` reads that file and validates the supplied username/password pair.
+- `Login.createSession()` stores a 16-character `sessionToken` in `SharedPreferences` under `SessionPrefs`.
+- `Login.generateSessionToken()` creates that token with `java.util.Random`, which is not suitable for session or authentication material.
+- `Profile` clears the stored token on logout, but the shipped sample does not validate `sessionToken` before opening the screen. The report now states this limitation explicitly.
 
-## Identified Vulnerability
+## Security Finding
 
-The primary vulnerability discovered is **Insecure Randomness in Session Token Generation** located in `com.example.mastg_test0016.Login.generateSessionToken()`.
+The core finding is weak randomness in `com.example.mastg_test0016.Login.generateSessionToken()`. The token is intended to represent session state, but it is derived from `java.util.Random` rather than `java.security.SecureRandom`. That makes the design inappropriate for any value that may later be trusted as proof of authentication.
 
-The application uses `java.util.Random` to generate 16-character session tokens. Because `java.util.Random` is a deterministic PRNG and not cryptographically secure, an attacker who can estimate the seeding time (typically system time) can predict or regenerate valid session tokens to hijack user sessions.
+Static analysis found one other `Random` use in `MainActivity.randomNumberGenerator()`, but that method is not referenced elsewhere and does not protect a security-sensitive asset.
 
-## How to Run the POC
+## Files Updated
 
-To verify the predictability of the random number generator used in the app, you can compile and run the provided Java POC:
+- `findings/report.tex`: rewritten to align with the assignment rubric and the verified code path.
+- `findings/ai-log.txt`: expanded with evidence, validation steps, and a rubric-driven mock Q&A summary.
+- `findings/SessionTokenPOC.java`: replaced with a reproducible recovery demo based on the app's token-generation logic.
+
+## Run the POC
+
+Compile and run the proof of concept:
 
 ```bash
-# Compile the POC
 javac findings/SessionTokenPOC.java
-
-# Run the POC
 java -cp findings SessionTokenPOC
 ```
 
-The output will show that two separate calls to the generator using the same seed produce identical "random" tokens.
+The new POC keeps the APK's token-generation logic, injects a fixed seed for reproducibility, and brute-forces a small seed window to recover the same token. This demonstrates why `java.util.Random` is the wrong primitive for session material.
 
-## Mitigation
+Example output from the executed run in this workspace:
 
-The vulnerability should be mitigated by replacing `java.util.Random` with `java.security.SecureRandom`, which is designed for security-sensitive applications and is resistant to seed prediction.
+```text
+Simulated vulnerable token: blMdycOkq5ZDCHdO
+Search window: [1735689598123, 1735689602123]
+Recovered seed: 1735689600123
+Predicted token: blMdycOkq5ZDCHdO
+Attack successful: true
+```
+
+## Notes on Scope
+
+This repository demonstrates the weak-randomness finding and a reproducible token-recovery workflow. It does not claim a full end-to-end authentication bypass against the shipped APK, because the current `Profile` activity never checks the stored token before rendering the protected screen.

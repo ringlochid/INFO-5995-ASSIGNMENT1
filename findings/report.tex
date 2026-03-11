@@ -1,114 +1,102 @@
 \documentclass[letterpaper,twocolumn,10pt]{article}
 \usepackage{usenix2019_v3}
-
-% to be able to draw some self-contained figs
+\usepackage{microtype}
 \usepackage{tikz}
-\usepackage{amsmath}
+\usepackage{listings}
+\usetikzlibrary{arrows.meta,calc,positioning}
+\microtypecontext{spacing=nonfrench}
 
-% inlined bib file
-\usepackage{filecontents}
-
-%-------------------------------------------------------------------------------
-\begin{document}
-%-------------------------------------------------------------------------------
-
-%don't want date printed
-\date{}
-
-% make title bold and 14pt font (Latex default is non-bold, 16pt)
-\title{\Large \bf AI-Assisted Cryptographic Vulnerability Discovery in Android Applications}
-
-\author{
-{\rm Student Name}\\
-University of XYZ
+\lstset{
+basicstyle=\ttfamily\scriptsize,
+breaklines=true,
+breakatwhitespace=true,
+frame=single,
+columns=fullflexible,
+keepspaces=true
 }
 
+\begin{document}
+\date{}
+\title{\Large \bf AI-Assisted Discovery of Weak Session Token Randomness in an Android APK}
+\author{{\rm Group Submission}\\INFO5995 Assignment 1}
 \maketitle
 
-%-------------------------------------------------------------------------------
 \begin{abstract}
-%-------------------------------------------------------------------------------
-Mobile application security is critical for protecting user data. This report details the security analysis of an Android application package (APK) using AI-assisted static analysis. We identified a significant vulnerability related to weak randomness in session token generation. This report describes the discovery process, system model, vulnerability details, and proposed mitigations.
+We decompiled and reviewed the Android APK \texttt{a1\_case1 (1).apk} to identify security-sensitive uses of random-looking values. The main finding is that the login flow creates a 16-character session token with \texttt{java.util.Random}, which is unsuitable for authentication or session material. The report aligns its claims with verified evidence from the decompiled code, including the important limitation that the shipped sample stores the token but does not validate it before opening the profile screen.
 \end{abstract}
 
-%-------------------------------------------------------------------------------
 \section{Introduction}
-%-------------------------------------------------------------------------------
-Android applications often handle sensitive information, including user credentials and session identifiers. Decompilation and static analysis are essential techniques for auditing APKs to identify potential security flaws before deployment. This analysis focuses on \texttt{a1\_case1.apk}, aiming to identify cryptographic weaknesses that could compromise user sessions.
+An Android application package (APK) is the installable bundle for an Android app, including code, resources, and the manifest. Because only the APK was provided, decompilation was required to inspect behavior, storage, and security-relevant design choices. We used \texttt{jadx}~\cite{jadx} to recover the manifest and Java source, then focused on values that looked random, token-like, or authentication-related.
 
-%-------------------------------------------------------------------------------
 \section{System and Threat Model}
-%-------------------------------------------------------------------------------
-The application consists of three main activities: \texttt{MainActivity}, \texttt{Login}, and \texttt{Profile}. 
+The app has three core activities. \texttt{MainActivity} collects a username and password and stores them in app-private storage as \texttt{credentials.txt}. \texttt{Login} reads that file, checks the supplied credentials, and on success writes a 16-character \texttt{sessionToken} to \texttt{SharedPreferences} under \texttt{SessionPrefs}. \texttt{Profile} provides a logout button that removes the stored token.
 
-\subsection{Main Components and Assets}
-\begin{itemize}
-    \item \textbf{User Credentials}: Stored in plain text in \texttt{credentials.txt} within the app's internal storage.
-    \item \textbf{Session Token}: A 16-character alphanumeric string generated upon successful login and stored in \texttt{SharedPreferences}.
-    \item \textbf{Data Flow}: Credentials are saved in \texttt{MainActivity}, verified in \texttt{Login}, which then generates a session token to allow access to \texttt{Profile}.
-\end{itemize}
+\begin{figure}[t]
+\centering
+\begin{tikzpicture}[
+>=Latex,
+node distance=4mm and 6mm,
+box/.style={draw, rounded corners, align=center, font=\scriptsize, minimum width=1.75cm, minimum height=0.7cm},
+asset/.style={draw, dashed, rounded corners, align=center, font=\scriptsize, minimum width=2.05cm, minimum height=0.7cm}
+]
+\node[box] (main) {MainActivity};
+\node[box, below=of main] (login) {Login};
+\node[box, below=of login] (profile) {Profile};
+\node[asset, right=of main] (cred) {credentials.txt\\username, password};
+\node[asset, right=of login] (sess) {SessionPrefs\\sessionToken};
+\draw[->] (main) -- node[left, font=\scriptsize]{launch} (login);
+\draw[->] (login) -- node[left, font=\scriptsize]{success} (profile);
+\draw[->] (main) -- node[above, font=\scriptsize]{write} (cred);
+\draw[->] (login) -- node[above, font=\scriptsize]{read/write} (sess);
+\draw[->, dashed] ($(login.west)+(-0.1,0)$) -- ++(-1.0,0)
+  node[left, align=right, font=\scriptsize]{attacker observes\\login timing};
+\end{tikzpicture}
+\caption{Simple system model showing app components, protected assets, and the session flow affected by weak randomness.}
+\end{figure}
 
-\subsection{Attacker Model}
-We assume a \textbf{Network Observer} or a \textbf{Local Attacker} on the same device.
-\begin{itemize}
-    \item \textbf{Attacker Goals}: Hijack user sessions or gain unauthorized access to the \texttt{Profile} activity.
-    \item \textbf{Capabilities}: The attacker can observe the timing of a user's login and possesses the ability to run computational tasks to brute-force seeds for non-cryptographically secure random number generators.
-\end{itemize}
+The protected assets are the username/password pair and the session token. The relevant attacker is a local analyst or instrumented test environment that can decompile the APK, observe when a login occurs, and model or recover the state of a weak PRNG used for session material. We do not assume direct access to app-private files by another normal app, and we explicitly note that the current \texttt{Profile} activity does not enforce the token before rendering.
 
-%-------------------------------------------------------------------------------
-\section{Vulnerability Discovery}
-%-------------------------------------------------------------------------------
-The vulnerability was discovered using static analysis tools and AI-assisted manual code review.
+\section{How the Finding Was Discovered}
+Static analysis located two uses of \texttt{java.util.Random}. The first, \texttt{MainActivity.randomNumberGenerator()}, returns \texttt{nextInt(100)} and is not referenced elsewhere, so it has no security role. The second appears in \texttt{Login.generateSessionToken()}, which is called by \texttt{createSession()} immediately after successful authentication. The decompiled token-generation excerpt is shown below.
+
+\begin{lstlisting}[language=Java,caption={Excerpt from the decompiled \texttt{Login} class showing \texttt{Random}-based token generation.}]
+Random random = new Random();
+for (int i = 0; i < 16; i++) {
+    sb.append(ALPHABET.charAt(random.nextInt(62)));
+}
+\end{lstlisting}
+
+AI assistance was used to select tooling and suggest targeted searches such as \texttt{random}, \texttt{token}, and \texttt{session}. However, each claim in the final report was validated against the decompiled source because that review was necessary to avoid overstating the exploit path.
+
+\section{Vulnerability and Attack Scenario}
+\texttt{java.util.Random}~\cite{randomdoc} is a deterministic general-purpose PRNG, not a cryptographically secure random number generator. A value named \texttt{sessionToken} is therefore generated with the wrong primitive for its security role. If an attacker can bound the generator state closely enough, the same token sequence can be reproduced offline. Our proof of concept reuses the APK's token-generation loop and, for reproducibility, injects a fixed seed so that token recovery from a small candidate window can be demonstrated end to end.
+
+A plausible attack path, if the token were later relied on outside this sample UI, is:
 \begin{enumerate}
-    \item \textbf{Decompilation}: The APK was decompiled using \texttt{jadx} to retrieve Java source code and the \texttt{AndroidManifest.xml}.
-    \item \textbf{Static Analysis}: A search for keywords such as ``random'', ``token'', and ``crypto'' identified the \texttt{generateSessionToken()} method in \texttt{Login.java}.
-    \item \textbf{AI Interaction}: AI was used to analyze the decompiled code and identify the use of \texttt{java.util.Random} as a security-sensitive weakness.
+\item Observe when a login event occurs or otherwise obtain enough information to constrain the PRNG state.
+\item Reimplement the token-generation loop from \texttt{Login.generateSessionToken()}.
+\item Enumerate candidate PRNG states in the feasible window until the generated token matches the observed or target token.
+\item Reuse that token anywhere the application or a future backend trusts it as proof of an authenticated session.
 \end{enumerate}
 
-%-------------------------------------------------------------------------------
-\section{Vulnerability Details: Weak Randomness}
-%-------------------------------------------------------------------------------
-The \texttt{Login.java} class uses \texttt{java.util.Random} to generate a 16-character session token:
-\begin{verbatim}
-private String generateSessionToken() {
-    Random random = new Random();
-    StringBuilder sb = new StringBuilder(16);
-    for (int i = 0; i < 16; i++) {
-        sb.append(CHAR_SET.charAt(random.nextInt(62)));
-    }
-    return sb.toString();
-}
-\end{verbatim}
+One important limitation is that the shipped sample never checks \texttt{sessionToken} before launching \texttt{Profile}; the activity is also marked \texttt{android:exported="false"}. For that reason, we do not claim a complete end-to-end bypass against this APK alone. The demonstrated defect is narrower but still real: the app creates session material with a predictable, non-cryptographic generator.
 
-\subsection{Risk and Impact}
-\texttt{java.util.Random} is a linear congruential generator (LCG), which is not cryptographically secure. Its output is deterministic based on an initial seed. In many Android versions, \texttt{new Random()} uses \texttt{System.nanoTime()} or \texttt{System.currentTimeMillis()}, making it predictable if an attacker can estimate the generation time.
-
-\subsection{Attack Scenario}
-1. The attacker observes a user logging into the application and records the approximate time.
-2. The attacker uses the estimated time as a range of potential seeds for \texttt{java.util.Random}.
-3. The attacker generates candidate session tokens for each seed in the range.
-4. The attacker uses the predicted tokens to bypass authentication and access the \texttt{Profile} activity directly.
-
-%-------------------------------------------------------------------------------
 \section{Fix and Mitigation}
-%-------------------------------------------------------------------------------
-The primary fix is to replace \texttt{java.util.Random} with \texttt{java.security.SecureRandom}, which provides a cryptographically strong random number generator.
+The direct fix is to replace \texttt{java.util.Random} with \texttt{java.security.SecureRandom}~\cite{securedoc}, for example by instantiating a single \texttt{SecureRandom} and drawing token characters from it. \texttt{SecureRandom} is designed for security-sensitive tokens and resists practical state prediction far better than \texttt{Random}. A complete fix should also align the rest of the session design with that change: if the token is intended to protect access, protected screens or server endpoints must actually validate it instead of merely storing it on the client.
 
-\begin{verbatim}
-import java.security.SecureRandom;
-...
-private String generateSessionToken() {
-    SecureRandom random = new SecureRandom();
-    // Use random.nextInt(62) as before
-    ...
-}
-\end{verbatim}
-
-\texttt{SecureRandom} is designed for security-sensitive contexts and is resistant to seed recovery attacks. Additionally, the application should use \texttt{MODE_PRIVATE} and encrypt credentials before storing them in \texttt{credentials.txt}.
-
-%-------------------------------------------------------------------------------
 \section{Conclusion}
-%-------------------------------------------------------------------------------
-The analysis of \texttt{a1_case1.apk} revealed a critical weakness in session token generation due to the use of insecure randomness. By adopting cryptographically secure primitives like \texttt{SecureRandom}, the application can significantly improve its resistance to session hijacking attacks.
+Decompilation, targeted static analysis, and AI-assisted review identified the intended cryptographic weakness in this APK: a session token generated with \texttt{java.util.Random}. The final report aligns with the assignment requirements by presenting a clear system model, a concrete code-level finding, an evidence-based threat model, and a technically sound mitigation.
+
+\begin{thebibliography}{9}
+\small
+\bibitem{jadx}
+Skylot. \textit{jadx}. \url{https://github.com/skylot/jadx}
+
+\bibitem{randomdoc}
+Android Developers. \textit{java.util.Random}. \url{https://developer.android.com/reference/java/util/Random}
+
+\bibitem{securedoc}
+Android Developers. \textit{java.security.SecureRandom}. \url{https://developer.android.com/reference/java/security/SecureRandom}
+\end{thebibliography}
 
 \end{document}
