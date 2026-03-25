@@ -1,5 +1,4 @@
-# POCs
-
+POCs
 This folder contains code-level proof-of-concept helpers.
 
 - `SessionTokenPOC.java` (in `findings/`) demonstrates `Random` token prediction logic.
@@ -14,5 +13,8 @@ Open the `index.html` file in each folder to run the emulator locally.
 
 ## POC Videos
 
-Recording instructions are in `pocs/videos/README.md`.
+Recording are in `pocs/videos/`.
+
+- SessionTokenPOC.java (in findings/) demonstrates Random token prediction logic.
+- CredentialsPOC.java (in findings/) demonstrates parsing plaintext credentials.
 
